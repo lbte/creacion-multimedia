@@ -1,6 +1,11 @@
 # creacion-multimedia
 Repositorio creado para los trabajos de la materia Creación Multimedia / Multimedia interactiva
 
+Integrantes:
+Laura Vanesa Bustamante Hurtado
+Santiago Herrera Pineda
+Felipe Merino Toro
+
 Fuentes de inspiración:
 
 ![hilorama2](https://images.squarespace-cdn.com/content/v1/5744808e27d4bd89642b72f4/1588110774300-7FLNGNLLUQ14X6TM9E7A/stringart12.png?format=750w)
