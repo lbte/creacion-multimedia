@@ -1,0 +1,308 @@
+// TouchDesigner version by exsstas https://github.com/exsstas/Raymarching-in-TD
+
+layout (location = 0) out vec4 fragColor; // output variable that will hold the final color of each pixel 
+
+uniform vec2 uRes;                      // GLSL TOP resolution (resolution of the output image)
+uniform float uTime;                    // time parameter that can be used to simple animation
+uniform float uMouseX;					// used to control the position of one sphere in the scene
+uniform float uMouseY;
+uniform float uNoise;					// noise parameter used to create the noise effect on one of the spheres
+
+// raymarcher parameters
+uniform int uSteps;                     // the max steps before giving up
+uniform float uMinDist;                 // the starting distance away from the camera
+uniform float uMaxDist;                 // the max distance away from the camera to march before giving up
+
+// Camera and color parameters
+uniform vec4 uCamera;                   // XYZ position + Field of view for a camera
+uniform vec3 uLookAt;
+uniform vec3 uLight1Pos;                // Light position
+uniform vec3 uLight1Col;                // Light color
+
+// coefficients for ambient, diffuse, and specular lighting
+uniform vec3 uAmbient;
+uniform vec3 uDiffuse;
+uniform vec3 uSpecular;
+uniform float uShine;                   // Shininess coefficient
+
+uniform vec3 uAO;                       // Ambient Occlusion
+uniform vec4 uShadow;                   // Soft shadow http://iquilezles.org/www/articles/rmshadows/rmshadows.htm
+
+
+//------------------------------------------------------------
+// Scene setup
+//------------------------------------------------------------
+// SDF functions
+
+// http://iquilezles.org/www/articles/distfunctions/distfunctions.htm
+// http://mercury.sexy/hg_sdf/
+
+// k defines the size of the smooth transition between the two primitives
+float opSmoothUnion( float d1, float d2, float k ) {
+	// the clamp function is used to constrain a value to lie between 0 and 1
+    float h = clamp( 0.5 + 0.5*(d2-d1)/k, 0.0, 1.0 );
+    // mix is used to linearly interpolate between two values, h is the value to use to
+    // interpolate between d2 and d1 
+    return mix( d2, d1, h ) - k*h*(1.0-h); }
+
+float opSmoothIntersection( float d1, float d2, float k ) {
+    float h = clamp( 0.5 - 0.5*(d2-d1)/k, 0.0, 1.0 );
+    return mix( d2, d1, h ) + k*h*(1.0-h); }
+
+float sdSphere( vec3 p, float s )
+{
+    return length(p)-s;
+}
+
+
+float sceneSDF(vec3 p) {
+    float plane = p.y -(-1.0);
+
+    // SPHERE 1
+    // position
+    vec3 xyz1 = vec3(uMouseX, uMouseY, 0.0);
+    // diameter
+    float d1 = 0.5;
+    // creation of the sphere using the SDF defined
+    float sphere1 = sdSphere(p - xyz1, d1);
+
+    
+    // SPHERE 2 
+    vec3 xyz2 = vec3( 0.0 , 0.0, 0.0);
+    float d2 = 0.7;
+    float sphere2 = sdSphere(p - xyz2, d2);
+    
+    // definition of the noise 
+    float noise = TDPerlinNoise(vec4(p.zxy, uTime*0.5)*uNoise)*1.0;
+    
+    // intersection between the noise and the sphere at the center
+    float sphnoise = opSmoothIntersection(noise, sphere2, 0.1);
+    
+    float fUnion = opSmoothUnion(sphere1, sphere2, 0.25);
+
+    // union of both spheres in a smooth way
+    float scene = opSmoothUnion(sphere1, sphere2, 1.0);
+    float scene1 = min(sphnoise, plane); // allows a smooth intersection
+
+
+    // finally the scene is shown
+    scene = opSmoothIntersection(scene1, sphnoise, 1.0);
+    scene = opSmoothUnion(scene, fUnion, 1.0);
+    
+    return scene * 0.2; //multiply the scene by 0.2 to avoid unwanted artifacts
+}
+
+//------------------------------------------------------------
+// Distance and direction
+//------------------------------------------------------------
+/**
+ * eye: the camera point, acting as the origin of the ray
+ * marchingDirection: the normalized direction to march in
+ * start: the starting distance away from the eye
+ * end: the max distance away from the eye to march before giving up
+ */
+float shortestDistanceToSurface(vec3 eye, vec3 marchingDirection, float start, float end) {
+    float depth = start;
+    for (int i = 0; i < uSteps; i++) {
+        float dist = sceneSDF(eye + depth * marchingDirection);
+        if (dist < start) {
+            return depth;
+        }
+        depth += dist;
+        if (depth >= end) {
+            return end;
+        }
+    }
+    return end; // shortest distance to the surface of the scene
+}
+
+/**
+**
+ * Return the normalized direction to march in from the eye point for a single pixel.
+ * 
+ * fieldOfView: vertical field of view in degrees
+ * size: resolution of the output image
+ * fragCoord: the x,y coordinate of the pixel in the output image
+ */
+vec3 rayDirection(float fieldOfView, vec2 size, vec2 fragCoord) {
+    vec2 xy = fragCoord - size / 2.0;
+    float z = size.y / tan(radians(fieldOfView) / 2.0);
+    return normalize(vec3(xy, -z));
+}
+
+//------------------------------------------------------------
+// Normals
+//------------------------------------------------------------
+/**
+ * Using the gradient (tells you what direction to move in from (x,y,z) to most 
+ rapidly increase the value of the function) of the SDF, estimate the normal on the surface at 
+ point p to calculate what color a material should be at a given point p on the surface.
+ */
+vec3 estimateNormal(vec3 p) {
+    return normalize(vec3(
+        sceneSDF(vec3(p.x + uMinDist, p.y, p.z)) - sceneSDF(vec3(p.x - uMinDist, p.y, p.z)),
+        sceneSDF(vec3(p.x, p.y + uMinDist, p.z)) - sceneSDF(vec3(p.x, p.y - uMinDist, p.z)),
+        sceneSDF(vec3(p.x, p.y, p.z  + uMinDist)) - sceneSDF(vec3(p.x, p.y, p.z - uMinDist))
+    ));
+}
+
+
+//------------------------------------------------------------
+// Light + coloring + shadows
+//------------------------------------------------------------
+
+// compute ambient occlusion value at given position/normal
+// Source - https://www.shadertoy.com/view/lsKcDD
+float calcAO( in vec3 pos, in vec3 nor )
+{
+    float occ = uAO.x;
+    float sca = uAO.y;
+    for( int i=0; i<uAO.z; i++ )
+    {
+        float hr = 0.01 + 0.12*float(i)/4.0;
+        vec3 aopos =  nor * hr + pos;
+        float dd = sceneSDF( aopos );
+        occ += -(dd-hr)*sca;
+        sca *= 0.95;
+    }
+    return clamp( 1.0 - 3.0*occ, 0.0, 1.0 );    
+}
+
+// Soft shadow code from http://iquilezles.org/www/articles/rmshadows/rmshadows.htm
+float softshadow(vec3 p, vec3 eye)
+{
+    float mint = uShadow.x;
+    float maxt = uShadow.y;
+    float k = uShadow.z;
+    float res = 1.0;
+    float ph = 1e20;
+    for( float t=mint; t<maxt; )
+    {
+        float h = sceneSDF(p + eye*t);
+        if( h<0.001 )
+            return 0.0;
+        float y = h*h/(2.0*ph);
+        float d = sqrt(h*h-y*y);
+        res = min( res, k*d/max(0.0,t-y) );
+        ph = h;
+        t += h;
+    }
+    return res;
+}
+
+
+
+vec3 phongContribForLight(vec3 k_d, vec3 k_s, float alpha, vec3 p, vec3 eye,
+                          vec3 lightPos, vec3 lightIntensity) {
+    vec3 N = estimateNormal(p);
+    vec3 L = normalize(lightPos - p);
+    vec3 V = normalize(eye - p);
+    vec3 R = normalize(reflect(-L, N));
+
+    float occ = calcAO(p, N);       // Ambient occlusion
+    
+    float dotLN = dot(L, N);
+    float dotRV = dot(R, V);
+    
+    if (dotLN < 0.0) {
+        // Light not visible from this point on the surface, so add no color
+        return vec3(0.0);
+    } 
+    
+    if (dotRV < 0.0) {
+        // Light reflection in opposite direction as viewer, apply only diffuse
+        // component
+        return lightIntensity * (k_d * dotLN) *sqrt(occ);
+    }
+    return lightIntensity * (k_d * dotLN + k_s * pow(dotRV, alpha)) *sqrt(occ);
+}
+
+/**
+ * Lighting via Phong illumination. 
+ * Phong reflection is an empirical model of local illumination. It describes the way 
+ * a surface reflects light as a combination of the diffuse reflection of rough surfaces 
+ * with the specular reflection of shiny surfaces.
+ * 
+ * The vec3 returned is the RGB color of that point after lighting is applied.
+ * k_a: Ambient color
+ * k_d: Diffuse color
+ * k_s: Specular color
+ * alpha: Shininess coefficient
+ * p: position of point being lit
+ * eye: the position of the camera
+ *
+ * See https://en.wikipedia.org/wiki/Phong_reflection_model#Description
+ */
+ 
+vec3 phongIllumination(vec3 k_a, vec3 k_d, vec3 k_s, float alpha, vec3 p, vec3 eye) {
+    const vec3 ambientLight = 0.5 * vec3(1.0, 1.0, 1.0);
+    vec3 color = ambientLight * k_a;
+    color += phongContribForLight(k_d, k_s, alpha, p, eye,
+                                  uLight1Pos,
+                                  uLight1Col);
+    float shadow = softshadow( p, normalize(uLight1Pos-p));     // calc grayscale shadow
+ 
+       
+    vec3 cshadow = color * shadow;                              // multiply shadows with color
+    color = mix(color, vec3(cshadow), uShadow.w);               // mix color+shadows based on uShadow 4th value
+    return color;
+}
+
+
+//------------------------------------------------------------
+// "Look at ..." matrix
+//------------------------------------------------------------
+/**
+ * Return a transform matrix that will transform a ray from view space
+ * to world coordinates, given the eye point, the camera target, and an up vector.
+ *
+ * This assumes that the center of the camera is aligned with the negative z axis in
+ * view space when calculating the ray marching direction. See rayDirection.
+ */
+mat4 viewMatrix(vec3 eye, vec3 center, vec3 up) {
+    // Based on gluLookAt man page
+    vec3 f = normalize(center - eye);
+    vec3 s = normalize(cross(f, up));
+    vec3 u = cross(s, f);
+    return mat4(
+        vec4(s, 0.0),
+        vec4(u, 0.0),
+        vec4(-f, 0.0),
+        vec4(0.0, 0.0, 0.0, 1)
+    );
+}
+
+//------------------------------------------------------------
+// Put everything together
+/*
+ Main iterates over each pixel in the output image and computes its color using the 
+ ray marching algorithm. The color is computed using a combination of ambient, 
+ diffuse, and specular lighting, with shadows and ambient occlusion added as well. 
+ The final color is written to the output variable fragColor
+*/
+//------------------------------------------------------------
+void main()
+{
+    // setting camera(eye)
+    vec3 viewDir = rayDirection(uCamera.w, uRes.xy, gl_FragCoord.xy);
+    vec3 eye = uCamera.xyz;
+    mat4 viewToWorld = viewMatrix(eye, uLookAt, vec3(0.0, 1.0, 0.0));
+    vec3 worldDir = (viewToWorld * vec4(viewDir, 0.0)).xyz;
+
+	// shortestDistanceToSurface used to determine the color of each pixel
+    float dist = shortestDistanceToSurface(eye, worldDir, uMinDist, uMaxDist);
+    
+    if (dist > uMaxDist - uMinDist) {
+        fragColor = vec4(0.0);          // Didn't hit anything return transparent background
+        return;
+    }
+    
+    // The closest point on the surface to the eyepoint along the view ray
+    vec3 p = eye + dist * worldDir;         
+    
+    // coloring (details at line 217)
+    vec3 color = phongIllumination(uAmbient, uDiffuse, uSpecular, uShine, p, eye); 
+   
+    // alpha set to 1.0, try change it to 0.0 instead:
+    fragColor = vec4(color, 1.0);
+}
