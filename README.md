@@ -25,3 +25,7 @@ Fuente de inspiración para ritmos:
 
 ### Proyecto 2 - Generación de audio
 Realizado en el programa [Touch Designer](https://derivative.ca). Touch designer es un ambiente visual de programación procedimental basada en nodos.
+
+Funcionamiento: [Video](https://drive.google.com/file/d/1EYZhQNJ8xzjlmQX6DJ8-GkIB1cRM1PD1/view?usp=share_link)
+
+Nota: En la carpeta del proyecto se encuentra el archivo .toe de Touch Designer además de un archivo .txt con el código que se encuentra del archivo .toe.
