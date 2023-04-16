@@ -15,7 +15,7 @@ Fuentes de inspiración:
 
 <img src="https://images.squarespace-cdn.com/content/v1/5744808e27d4bd89642b72f4/1588110774300-7FLNGNLLUQ14X6TM9E7A/stringart12.png?format=750w" alt="Hilorama" width="300" height="300"> <img src="https://i.pinimg.com/originals/54/7b/2f/547b2f9975e9b7606605a3f300511b4f.jpg" alt="Hilorama" width="300" height="300">
 
-
+Funcionamiento: [Video](https://drive.google.com/file/d/1HsfqSjisg-bn_dpSmoM3DB0OfQbPsHH5/view?usp=share_link)
 
 ### Research & Develop (R&D)
 Realizado en el programa [Pure Data](https://puredata.info).
